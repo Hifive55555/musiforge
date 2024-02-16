@@ -8,3 +8,9 @@ edition = "2021"
 [dependencies]
 cpal = "*"
 anyhow = "*"
+log = "*"
+env_logger = "*"
+
+eframe = "*"
+egui = "*"
+winapi = { version = "0.3", features = ["winuser", "windef"] }

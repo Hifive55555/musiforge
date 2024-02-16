@@ -1,6 +1,6 @@
 // 之后考虑加入“加法”
 
-pub trait Key {
+pub trait Key: Send + std::fmt::Debug {
     fn to_freqkey(&self) -> FreqKey;
 
     fn get_type(&self) -> KeyType;
@@ -12,6 +12,7 @@ pub enum KeyType {
     // Tuned12,
 }
 
+#[derive(Debug)]
 pub struct FreqKey{
     pub f: f32,
     pub volume: u8,
@@ -32,6 +33,7 @@ impl Key for FreqKey {
     }
 }
 
+#[derive(Debug)]
 pub struct Note12Key<'a> {
     pub key: (&'a str, u8),
     pub volume: u8,

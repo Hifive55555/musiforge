@@ -23,7 +23,7 @@ impl Piano {
         }
     }
 
-    pub fn send_key<K: Key>(&mut self, key: K) {
+    pub fn send_key(&mut self, key: Box<dyn Key>) {
         // match key.get_type() {
         //     KeyType::Freq => {
         //         thread::spawn(move || {
