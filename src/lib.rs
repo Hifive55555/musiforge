@@ -17,77 +17,6 @@ pub mod config {
     };
     use cpal::{FromSample, Sample};
 
-    pub enum Waveform {
-        Sine,
-        Square,
-        Saw,
-        Triangle,
-    }
-
-    pub struct Oscillator {
-        pub sample_rate: f32,
-        pub waveform: Waveform,
-        pub current_sample_index: f32,
-        pub frequency_hz: f32,
-    }
-
-    impl Oscillator {
-        fn advance_sample(&mut self) {
-            self.current_sample_index = (self.current_sample_index + 1.0) % self.sample_rate;
-        }
-
-        fn set_waveform(&mut self, waveform: Waveform) {
-            self.waveform = waveform;
-        }
-
-        fn calculate_sine_output_from_freq(&self, freq: f32) -> f32 {
-            let two_pi = 2.0 * std::f32::consts::PI;
-            (self.current_sample_index * freq * two_pi / self.sample_rate).sin()
-        }
-
-        fn is_multiple_of_freq_above_nyquist(&self, multiple: f32) -> bool {
-            self.frequency_hz * multiple > self.sample_rate / 2.0
-        }
-
-        fn sine_wave(&mut self) -> f32 {
-            self.advance_sample();
-            self.calculate_sine_output_from_freq(self.frequency_hz)
-        }
-
-        fn generative_waveform(&mut self, harmonic_index_increment: i32, gain_exponent: f32) -> f32 {
-            self.advance_sample();
-            let mut output = 0.0;
-            let mut i = 1;
-            while !self.is_multiple_of_freq_above_nyquist(i as f32) {
-                let gain = 1.0 / (i as f32).powf(gain_exponent);
-                output += gain * self.calculate_sine_output_from_freq(self.frequency_hz * i as f32);
-                i += harmonic_index_increment;
-            }
-            output
-        }
-
-        fn square_wave(&mut self) -> f32 {
-            self.generative_waveform(2, 1.0)
-        }
-
-        fn saw_wave(&mut self) -> f32 {
-            self.generative_waveform(1, 1.0)
-        }
-
-        fn triangle_wave(&mut self) -> f32 {
-            self.generative_waveform(2, 2.0)
-        }
-
-        fn tick(&mut self) -> f32 {
-            match self.waveform {
-                Waveform::Sine => self.sine_wave(),
-                Waveform::Square => self.square_wave(),
-                Waveform::Saw => self.saw_wave(),
-                Waveform::Triangle => self.triangle_wave(),
-            }
-        }
-    }
-
     pub fn stream_setup_for<SampleType>(
         process_fn: impl FnMut(&mut [SampleType], usize, f32) + Send + 'static
     ) -> Result<cpal::Stream, anyhow::Error>
@@ -138,12 +67,6 @@ pub mod config {
         SampleType: SizedSample + FromSample<f32>,
     {
         let num_channels = config.channels as usize;
-        let mut oscillator = Oscillator {
-            waveform: Waveform::Sine,
-            sample_rate: config.sample_rate.0 as f32,
-            current_sample_index: 0.0,
-            frequency_hz: 440.0,
-        };
         let err_fn = |err| eprintln!("Error building output sound stream: {}", err);
 
         let time_at_start = std::time::Instant::now();

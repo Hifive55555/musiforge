@@ -62,7 +62,6 @@ impl eframe::App for Content {
                 waiting_keys.push(Box::new(
                     FreqKey { f: self.freq, volume: 1, duration: self.duration})
                 );
-                println!("Keys' length: {}", waiting_keys.len());
             }
 
             // =================================== //

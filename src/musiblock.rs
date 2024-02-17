@@ -6,7 +6,7 @@ use crate::key::*;
 // use std::collections::VecDeque;
 // use std::collections::HashMap;
 use std::f32::consts::PI;
-use std::f32::consts::E;
+use log::debug;
 
 const DOUBLE_PI: f32 = 2.0 * PI;
 
@@ -36,6 +36,7 @@ impl Piano {
         // }
         let key = key.to_freqkey();
         self.generators.push(PianoGenerator::new(key, self.alpha));
+        debug!("Generators' lehgth: {}", self.generators.len());
     }
 
     pub fn tick(&mut self) -> f32 {
@@ -57,6 +58,7 @@ struct PianoGenerator {
     key: FreqKey,
     oscs: Vec<Oscillator>,
     current_sample: f32,
+    decay: f32,
     // data: VecDeque<f64>,
 }
 
@@ -69,34 +71,36 @@ impl PianoGenerator {
             if key.f * n > 20000.0 {
                 break;
             }
-            println!("frq: {} , n: {}, vol: {}", key.f * n, n, (1.0 / (n*n)));
+            let volume = (1.0 / (n*n)) * (DOUBLE_PI * key.f * n * alpha).sin(); // 求解能量收敛的波动方程
+            // debug!("Acticvate Key - frq: {} , n: {}, vol: {}", key.f * n, n, volume);
             oscs.push(Oscillator {
                 sample_rate: 44100.0,
                 current_sample_index: 0.0,
                 frequency_hz: key.f * n,
-                volume: (1.0 / (n*n)) * (DOUBLE_PI * n * alpha).sin() * (DOUBLE_PI * n * alpha).sin(),    // 求解能量收敛的波动方程
+                volume,
             });
             n += 1.0;
         }
-
         Self {
             key,
             oscs,
             current_sample: 0.0,
+            decay: 0.2,
             // data: VecDeque::new(),
         }
     }
 
     fn control(&mut self) -> Option<f32> {
-        if self.current_sample <= self.key.duration * 44100.0 {
+        if self.current_sample <= self.key.duration {
             // 输出一个 e^(-x) 的衰减值
-            Some(E.powf(- self.current_sample))
-        } else if self.current_sample <= (self.key.duration + 1.0) * 44100.0 {
+            Some((-self.current_sample).exp())
+        } else if self.current_sample <= self.key.duration + self.decay {
             Some(
                 // 线性衰减
-                E.powf(- self.key.duration * 44100.0) * (self.current_sample + (1.0 - self.key.duration)* 44100.0)
+                (-self.key.duration).exp() * (self.key.duration + self.decay - self.current_sample) / self.decay,
             )
         } else {
+            debug!("Key has finished after a duration of {}s.", self.key.duration + self.decay);
             None
         }
     }
