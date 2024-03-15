@@ -145,7 +145,7 @@ fn main(){
         let _ = midi_input.connect(
             midi_port,
             "test-port",
-            move |a, b, c| {
+            move |stamp, message, _| {
                 if let Ok(_) = rx.try_recv() {
                     // break; // 接收到关闭信号，退出循环
                 }
