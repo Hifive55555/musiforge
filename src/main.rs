@@ -13,23 +13,13 @@ use std::sync::{mpsc, Mutex, Arc};
 fn main() -> eframe::Result<()> {
     // 注册 env_logger
     init_logger();
-    // let (tx, rx) = mpsc::channel::<Box<dyn Key>>();
-    let mut waiting_keys: Arc<Mutex<Vec<Box<dyn Key>>>> = Arc::new(Mutex::new(Vec::new()));
-    let tx = Arc::clone(&waiting_keys);
 
     thread::spawn(move || -> anyhow::Result<()> {
         info!("starting piano");
-        let mut p = musiblock::Piano::new(1.0 / 5.0);
+        let mut p = musiblock::Piano::new();
         
         let stream = stream_setup_for(
             move |data: &mut [f32], num_channels, time_start| {
-            let binding = Arc::clone(&waiting_keys);
-            let mut waiting_keys = binding.lock().unwrap();
-            
-            waiting_keys.retain(|key| {
-                p.send_key(Box::new(key.to_freqkey()));
-                false
-            });
     
             for frame in data.chunks_mut(num_channels) {
                 let value = p.tick();
@@ -52,12 +42,6 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|_cc| Box::new(Content::new(tx))),
     )
-}
-
-// 比较两个 f32 值
-fn approx_eq(a: f32, b: f32) -> bool {
-    // use std::f32::EPSILON;
-    (a - b).abs() < 0.004
 }
 
 fn init_logger() {

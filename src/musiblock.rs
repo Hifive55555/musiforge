@@ -40,8 +40,9 @@ impl Piano {
             self.key_generators.insert(midi_message[1], new_generator);
         } else if midi_message[0] == NOTE_OFF_MSG {
             // 发送停止符
-            let correspond_generator = self.key_generators.get_mut(&midi_message[1]).unwrap();
-            correspond_generator.borrow_mut().off();
+            if let Some(mut generator) = self.key_generators.remove(&midi_message[1]) {
+                generator.borrow_mut().off();
+            }
         }
     }
 
@@ -64,7 +65,7 @@ impl Piano {
 struct PianoGenerator
 {
     oscs: Vec<Box<dyn FnMut() -> f32>>,  // 里面就是相当于 tick() 的振荡器函数
-    env: Box<dyn FnMut() -> Option<f32>>,  // 总 ENV 函数
+    env_master: Envelope,  // 总 ENVELOP 函数
     current_sample: f32,
 }
 
@@ -84,19 +85,23 @@ impl PianoGenerator {
             oscs.push(Box::new(oscillator(44100.0, freq * n, volume)));
             n += 1.0;
         }
-        // 生成 ENV 函数
-        let nodes = vec![
-            Node{t: 0.0, v: 1.0, style: Curves::Linear},
-            Node{t: 1.0, v: 0.0, style: Curves::Linear}];
-        let env = Box::new(envelop(nodes, 44100.0));
+        // 生成主包络
+        let env_master = Envelope::from(vec![
+            Node {t:0.0, v: 1.0, curve: CurveType::Linear, if_hold: false},
+            Node {t:0.5, v: 0.7, curve: CurveType::Linear, if_hold: true},
+            Node {t:1.0, v: 0.0, curve: CurveType::Linear, if_hold: false},
+        ]);
         Self {
             oscs,
-            env,
+            env_master,
             current_sample: 0.0,
         }
     }
 
-    fn off(&mut self) {}
+    fn off(&mut self) {
+        // 释放 hold，使其衰减（目前只能无脑release，之后考虑定向释放）
+        self.env_master.release_hold();
+    }
 
     fn tick(&mut self) -> Option<f32> {
         self.current_sample += 1.0 / 44100.0;
@@ -104,8 +109,8 @@ impl PianoGenerator {
         for osc in &mut self.oscs {
             output += osc();
         }
-        // 通过 envelop() 计算，不过这个用法有点炸裂。我在想要不要不要存函数而是结构体
-        match self.env.as_mut()() {
+        // 通过 env
+        match self.env_master.tick() {
             Some(reduction) => Some(output * reduction),
             None => None,
         }
@@ -126,70 +131,104 @@ pub fn oscillator (
     }
 }
 
-// 包络生成器（就是一个函数，唯一棘手的需要知道现在的“t”的值）
-// 关键点 (t,v)，曲线类型 curves
-// 目前先搞线性的
-
-pub enum Curves {
+#[derive(Copy, Clone)]
+pub enum CurveType {
     Linear,
+    // 下面的以后做，但是意味着 Envelop 的架构要整体改，目前只能邻近插值
+    Newton,
+    Hermite,
+    CubicSpline,
 }
 
+#[derive(Copy, Clone)]
 pub struct Node {
     t: f32,
     v: f32,
-    style: Curves,
+    curve: CurveType,
+    if_hold: bool,
 }
 
-use std::cmp::Ordering;
+// 包络生成器
+pub struct Envelope {
+    nodes: Vec<Node>,
+    current_time: f32,
+    current_value: f32,
+    in_hold: bool,
+    current_index: usize,
+}
 
-/// A Function that return a closure of ENVELOP
-/// 
-/// # Examples
-/// 
-/// ```
-/// let nodes = vec![
-///     Node{t: 0.0, v: 1.0, style: Curves::Linear},
-///     Node{t: 1.0, v: 0.0, style: Curves::Linear}]；
-/// let env = envelop(nodes, 44100.0)
-/// ```
-pub fn envelop (
-    mut nodes: Vec<Node>,
-    sample_rate: f32
-) -> impl FnMut() -> Option<f32> {
-    let mut t = 0.0_f32;
+use super::approx_eq;
+// use std::cmp::Ordering;
 
-    nodes.sort_by(|a, b| match b.t.partial_cmp(&a.t) {
-        Some(Ordering::Greater) => Ordering::Greater,
-        _ => Ordering::Less,
-    });
-    // 计算分段函数（不知必不必要）
-    let mut func_vec = Vec::new();
-    let node_len = nodes.len() - 1;
-    for i in 0..node_len {
-        match nodes[i].style {
-            Curves::Linear => {
-                let (v1, t1, v2, t2) = (nodes[i].v, nodes[i].t, nodes[i+1].v, nodes[i+1].t);
-                let func_add = move |t: f32| {
-                    // v = dv/dt * (t-t1) + v1
-                    Some(v1 + (t - t1) * (v1 - v2)/(t1 - t2))
-                };
-                func_vec.push(Box::new(func_add));
-            }
+impl Envelope {
+    // ...
+    
+    fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            current_time: 0.0,
+            current_value: 0.0,
+            in_hold: false,
+            current_index: 0,
         }
     }
-    // 将 t 重新搞一个列表
-    let t_vec: Vec<f32> = nodes.iter().map(|node| node.t).collect();
-    // 返回一个分段函数闭包
-    move || -> Option<f32> {
-        t = (t + 1.0) % sample_rate;
-        let mut return_v = None;
-        // 分段检测
-        for i in 0..node_len {
-            if t_vec[i] <= t && t < t_vec[i+1] {
-                return_v = func_vec[i](t);
-                break;
-            }
+
+    fn from(nodes: Vec<Node>) -> Self {
+        let mut envelope = Self {
+            nodes,
+            current_time: 0.0,
+            current_value: 0.0,
+            in_hold: false,
+            current_index: 0,
+        };
+        envelope.sort();
+        envelope
+    }
+
+    fn tick(&mut self) -> Option<f32> {
+        if !self.in_hold {
+            self.current_time += 1.0/44100.0;
+        } else {
+            return Some(self.current_value);
         }
-        return_v
+        // 边界检查，到达最后一个节点时返回 None
+        if self.current_index == self.nodes.len() {return None;}
+        // 当前的节点，若存在下一个节点，则伺机等待
+        let node = self.nodes[self.current_index];
+        let node_2 = self.nodes[self.current_index+1];
+        // 判断并计算插值
+        self.current_value = Self::interpolation(&[node, node_2], self.current_time - node.t);
+        // 判断是切换下一个节点
+        if approx_eq(self.current_time, node_2.t) {
+            if node_2.if_hold {self.in_hold = true;}
+            self.current_index += 1;
+        }
+
+        Some(self.current_value)
+    }
+
+    // 由外部控制释放 hold
+    pub fn release_hold(&mut self) {
+        self.in_hold = false;
+    }
+
+    fn push(&mut self, node: Node) {
+        self.nodes.push(node);
+        self.sort();
+    }
+
+    fn sort(&mut self) {
+        self.nodes.sort_by(|a, b| b.t.partial_cmp(&a.t).unwrap());
+    }
+
+    // 插值算法实现（由上一个节点确定曲线类型）
+    fn interpolation(nodes: &[Node], current_time: f32) -> f32 {
+        // ...
+        match nodes[0].curve {
+            CurveType::Linear => {
+                nodes[0].v + current_time * (nodes[0].v - nodes[1].v)/(nodes[0].t - nodes[1].t)
+            }
+            _ => {1.0}
+        }
     }
 }

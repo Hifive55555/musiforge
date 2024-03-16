@@ -119,3 +119,7 @@ mod tests {
         assert_eq!(result, 4);
     }
 }
+
+fn approx_eq(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.004
+}
