@@ -1,6 +1,7 @@
 use musiforge::ui::Content;
 use musiforge::config::stream_setup_for;
-use musiforge::{musiblock, key::*};
+use musiforge::{musiblock, init_logger, approx_eq};
+use musiforge::musiblock::{Piano, Node};
 
 // use env_logger;
 use log::info;
@@ -15,72 +16,39 @@ fn main() -> eframe::Result<()> {
     init_logger();
 
     thread::spawn(move || -> anyhow::Result<()> {
-        info!("starting piano");
-        let mut p = musiblock::Piano::new();
+        let mut p = Piano::new();
         
         let stream = stream_setup_for(
-            move |data: &mut [f32], num_channels, time_start| {
-    
+            move |data: &mut [f32], num_channels, time| {
+            if approx_eq(time, 3.0) {
+                let midi_message: &[u8; 3] = &[0x90, 0x40, 0x90];
+                p.handle_midi_message(midi_message);
+            }
+            if approx_eq(time, 4.0) {
+                let midi_message: &[u8; 3] = &[0x80, 0x40, 0x90];
+                p.handle_midi_message(midi_message);
+            }
             for frame in data.chunks_mut(num_channels) {
                 let value = p.tick();
                 for sample in frame.iter_mut() {
                     *sample = value;
                 }
             }
-        })?;
-        stream.play()?;
+        }).unwrap();
+        stream.play().unwrap();
         // std::thread::sleep(std::time::Duration::from_millis(8000));
         std::thread::park();
         Ok(())
     });
+    std::thread::park();
+    return Ok(());
     
 
     // Initialize ui
     let options = eframe::NativeOptions::default();
-    eframe::run_native(
-        "Keyboard events",
-        options,
-        Box::new(|_cc| Box::new(Content::new(tx))),
-    )
-}
-
-fn init_logger() {
-    use chrono::Local;
-    use std::io::Write;
-    use env_logger::fmt::Color;
-    use env_logger::Env;
-    use log::LevelFilter;
-
-    let env = Env::default().filter_or("MY_LOG_LEVEL", "debug");
-    // let file_path = "target/log.log";
-    
-    // 设置日志打印格式
-    env_logger::Builder::from_env(env)
-    .format(|buf, record| {
-        let level_color = match record.level() {
-            log::Level::Error => Color::Red,
-            log::Level::Warn => Color::Yellow,
-            log::Level::Info => Color::Green,
-            log::Level::Debug | log::Level::Trace => Color::Cyan,
-        };
-
-        let mut level_style = buf.style();
-        level_style.set_color(level_color).set_bold(true);
-
-        let mut style = buf.style();
-        style.set_color(Color::White).set_dimmed(true);
-
-        writeln!(
-            buf,
-            "{} [ {} ] {}",
-            // Local::now().format("%Y-%m-%d %H:%M:%S"),
-            level_style.value(record.level()),
-            style.value(record.module_path().unwrap_or("<unnamed>")),
-            record.args()
-        )
-    })
-    .filter(None, LevelFilter::Debug)
-    // .target(std::fs::File::create(file_path).unwrap())
-    .init();
-    info!("env_logger initialized.");
+    // eframe::run_native(
+    //     "Keyboard events",
+    //     options,
+    //     Box::new(|_cc| Box::new(Content::new(tx))),
+    // )
 }

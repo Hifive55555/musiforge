@@ -118,8 +118,69 @@ mod tests {
         let result = add(2, 2);
         assert_eq!(result, 4);
     }
+
+    #[test]
+    fn envelop() {
+        use musiblock::{Envelope, Node, CurveType};
+        let mut env_master = Envelope::from(vec![
+            Node {t:0.0, v: 1.0, curve: CurveType::Linear, if_hold: false},
+            Node {t:0.5, v: 0.7, curve: CurveType::Linear, if_hold: true},
+            Node {t:1.0, v: 0.0, curve: CurveType::Linear, if_hold: false},
+        ]);
+        while let Some(value) = env_master.tick() {
+            if approx_eq(value, 0.0) {println!("1 {}", value);}
+            if approx_eq(value, 3.0) {
+                println!("r {}", value);
+                env_master.release_hold();
+            }
+        } 
+        println!("结束！");
+    }
 }
 
-fn approx_eq(a: f32, b: f32) -> bool {
+pub fn approx_eq(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.004
+}
+
+use log::info;
+
+pub fn init_logger() {
+    // use chrono::Local;
+    use std::io::Write;
+    use env_logger::fmt::Color;
+    use env_logger::Env;
+    use log::LevelFilter;
+
+    let env = Env::default().filter_or("MY_LOG_LEVEL", "debug");
+    // let file_path = "target/log.log";
+    
+    // 设置日志打印格式
+    env_logger::Builder::from_env(env)
+    .format(|buf, record| {
+        let level_color = match record.level() {
+            log::Level::Error => Color::Red,
+            log::Level::Warn => Color::Yellow,
+            log::Level::Info => Color::Green,
+            log::Level::Debug | log::Level::Trace => Color::Cyan,
+        };
+
+        let mut level_style = buf.style();
+        level_style.set_color(level_color).set_bold(true);
+
+        let mut style = buf.style();
+        style.set_color(Color::White).set_dimmed(true);
+
+        writeln!(
+            buf,
+            "{} [ {} ] {}",
+            // Local::now().format("%Y-%m-%d %H:%M:%S"),
+            level_style.value(record.level()),
+            style.value(record.module_path().unwrap_or("<unnamed>")),
+            record.args()
+        )
+    })
+    .filter(None, LevelFilter::Debug)
+    // .target(std::fs::File::create(file_path).unwrap())
+    .init();
+    info!("env_logger initialized.");
 }
