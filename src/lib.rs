@@ -3,9 +3,7 @@ pub mod ui;
 pub mod key;
 pub mod musiblock;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+pub const SAMPLE_RATE:f32 = 44100.0;
 
 pub mod config {
     extern crate anyhow;
@@ -114,12 +112,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-
-    #[test]
     fn envelop() {
         use musiblock::{Envelope, Node, CurveType};
         let mut env_master = Envelope::from(vec![
@@ -183,4 +175,17 @@ pub fn init_logger() {
     // .target(std::fs::File::create(file_path).unwrap())
     .init();
     info!("env_logger initialized.");
+}
+
+
+const MAX_NORMALIZED_VALUE: f32 = 1.0;
+
+// 分贝与电平转换
+pub fn db_to_vol(dbfs_value: f32) -> f32 {
+    let factor = f32::exp((dbfs_value / 10.0).ln()); // 使用e为底的对数进行逆运算
+    factor * MAX_NORMALIZED_VALUE.signum()
+}
+
+pub fn vol_to_db(normalized_value: f32) -> f32 {
+    10.0 * f32::log10(normalized_value.abs() / MAX_NORMALIZED_VALUE)
 }

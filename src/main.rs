@@ -20,12 +20,12 @@ fn main() -> eframe::Result<()> {
         
         let stream = stream_setup_for(
             move |data: &mut [f32], num_channels, time| {
-            if approx_eq(time, 3.0) {
-                let midi_message: &[u8; 3] = &[0x90, 0x40, 0x90];
+            if approx_eq(time, 3.5) {
+                let midi_message: &[u8; 3] = &[0x90, 0x44, 0x90];
                 p.handle_midi_message(midi_message);
             }
-            if approx_eq(time, 4.0) {
-                let midi_message: &[u8; 3] = &[0x80, 0x40, 0x90];
+            if approx_eq(time, 4.5) {
+                let midi_message: &[u8; 3] = &[0x80, 0x44, 0x90];
                 p.handle_midi_message(midi_message);
             }
             for frame in data.chunks_mut(num_channels) {

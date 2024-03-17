@@ -9,13 +9,12 @@ use midir::{Ignore, MidiIO, MidiInput, MidiOutput};
 use musiforge::musiblock::Piano;
 use musiforge::init_logger;
 use musiforge::config::stream_setup_for;
-use musiforge::approx_eq;
 
 fn main() -> Result<(), Box<dyn Error>> {
     init_logger();
 
     // 加载 Piano, (Piano 需要在多个线程中使用，out_device 线程、监听 midi 线程，故需要用 Arc<Mutex>)
-    let mut piano = Arc::new(Mutex::new(Piano::new()));
+    let piano = Arc::new(Mutex::new(Piano::new()));
     connect_out_device(piano.clone());
 
     // 实时设备连接
@@ -31,7 +30,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &in_port,
         "midir-forward",
         move |stamp, message, _| {
-            debug!("触发 midi 消息");
             piano.lock().unwrap().handle_midi_message(message);
             debug!("{}: {:?} (len = {})", stamp, message, message.len());
         },

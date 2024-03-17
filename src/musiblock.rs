@@ -6,6 +6,7 @@ use log::{debug, error};
 // use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use super::{SAMPLE_RATE, db_to_vol};
 const DOUBLE_PI: f32 = 2.0 * PI;
 
 pub struct Piano
@@ -13,6 +14,7 @@ pub struct Piano
     key_generators: HashMap<u8, Arc<Mutex<PianoGenerator>>>,  // 现在的目标键对应的发生器的指针
     queue_generators: Vec<Arc<Mutex<PianoGenerator>>>,  // 发生器队列
     alpha: f32,
+    limiter_master: Limiter,
 }
 
 impl Piano {
@@ -22,6 +24,7 @@ impl Piano {
             key_generators: HashMap::new(),
             queue_generators: Vec::new(),
             alpha: 0.33,
+            limiter_master: Limiter::new(),
         }
     }
 
@@ -39,7 +42,9 @@ impl Piano {
                 None => {}
             }
             // 添加新发生器，并更改键字典映射
-            let new_generator = Arc::new(Mutex::new(PianoGenerator::new(midi_message, self.alpha)));
+            let new_generator = Arc::new(Mutex::new(
+                PianoGenerator::new(midi_message, self.alpha, midi_message[2] as f32 / 12.7)
+            ));
             self.queue_generators.push(new_generator.clone());
             self.key_generators.insert(midi_message[1], new_generator);
 
@@ -70,7 +75,8 @@ impl Piano {
                 },
             }
         });
-        output
+        // self.limiter_master.tick(output)
+        clip(output)
     }
 }
 
@@ -78,23 +84,24 @@ struct PianoGenerator
 {
     oscs: Vec<Oscillator>,
     env_master: Envelope,  // 总 ENVELOP 函数
-    current_sample: f32,
+    t: f32,
+    vol: f32,
 }
 
 impl PianoGenerator {
-    fn new(midi_message: &[u8], alpha: f32) -> Self {
+    fn new(midi_message: &[u8], alpha: f32, db: f32) -> Self {
         // 计算泛音
         let mut oscs = Vec::new();
         let mut n: f32 = 1.0;
-        // 计算对应频率（A4 = 440.0 Hz = 57）
-        let freq = 440.0_f32 * 2.0_f32.powf((midi_message[1] - 0x39) as f32 / 12.0);  // 440 * 2^((key-57)/12)
+        // 计算对应频率（A4 = 440.0 Hz = 69）
+        let freq = 440.0_f32 * 2.0_f32.powf((midi_message[1] as i8 - 0x45) as f32 / 12.0);  // 440 * 2^((key-69)/12)
         loop {
             if freq * n > 20000.0 {
                 break;
             }
-            let volume = (1.0 / (n*n)) * (DOUBLE_PI * freq * n * alpha).sin(); // 求解能量收敛的波动方程
-            // debug!("Acticvate Key - frq: {} , n: {}, vol: {}", freq * n, n, volume);
-            oscs.push(Oscillator::new(44100.0, freq * n, volume));
+            let partial_volume = (1.0 / (n*n)) * (DOUBLE_PI * freq * n * alpha).sin(); // 求解能量收敛的波动方程
+            // debug!("Acticvate Key - frq: {} , n: {}, vol: {}", freq * n, n, partial_volume);
+            oscs.push(Oscillator::new(freq * n, partial_volume));
             n += 1.0;
         }
         // 生成主包络
@@ -103,11 +110,14 @@ impl PianoGenerator {
             Node {t:0.5, v: 0.7, curve: CurveType::Linear, if_hold: true},
             Node {t:1.0, v: 0.0, curve: CurveType::Linear, if_hold: false},
         ]);
-        debug!("初始化 PianoGenerator, 基频 {} Hz", freq);
+        // 计算按键 db 对应的 vol
+        let vol = db_to_vol(db);
+        debug!("初始化 PianoGenerator, 基频 {} Hz, 按压响度 {} db, 转换电平 {} V", freq, db, vol);
         Self {
             oscs,
             env_master,
-            current_sample: 0.0,
+            t: 0.0,
+            vol,
         }
     }
 
@@ -117,12 +127,14 @@ impl PianoGenerator {
     }
 
     fn tick(&mut self) -> Option<f32> {
-        self.current_sample += 1.0 / 44100.0;
+        self.t += 1.0 / SAMPLE_RATE;
         let mut output: f32 = 0.0;
         for osc in &mut self.oscs {
             output += osc.tick();
         }
-        // 通过 env
+        // 计算 midi 按键“声速”
+        output = clip(clip(output) * self.vol);
+        // 通过 envelop
         match self.env_master.tick() {
             Some(reduction) => Some(output * reduction),
             None => None,
@@ -130,23 +142,21 @@ impl PianoGenerator {
     }
 }
 
-// 为了实现 Send，被迫做成结构体，实际上里面封装了一个函数
+// 被迫做成结构体
 struct Oscillator {
-    state: Box<dyn FnMut() -> f32 + Send>,
+    t: f32,
+    pub freq: f32,
+    pub volume: f32,
 }
 
 impl Oscillator {
-    fn new(sample_rate: f32, freq: f32, volume: f32) -> Self {
-        let mut t: f32 = 0.0;
-        let state = Box::new(move || -> f32 {
-            t = (t + 1.0) % sample_rate;
-            (t * freq * DOUBLE_PI / sample_rate).sin() * volume
-        }) as Box<dyn FnMut() -> f32 + Send>;
-        Self { state }
+    fn new(freq: f32, volume: f32) -> Self {
+        Self {freq, t: 0.0, volume}
     }
 
     fn tick(&mut self) -> f32 {
-        (self.state)()
+        self.t = (self.t + 1.0) % SAMPLE_RATE;
+        (self.t * self.freq * DOUBLE_PI / SAMPLE_RATE).sin() * self.volume * 0.1
     }
 }
 
@@ -174,8 +184,10 @@ pub struct Envelope {
     nodes: Vec<Node>,
     current_time: f32,
     current_value: f32,
-    in_hold: bool,
     current_index: usize,
+
+    in_hold: bool,
+    ready_release: bool,  // 待释放队列（因为无法定向释放，故只需要存储带释放的数量）
 }
 
 use super::approx_eq;
@@ -189,8 +201,10 @@ impl Envelope {
             nodes: Vec::new(),
             current_time: 0.0,
             current_value: 0.0,
-            in_hold: false,
             current_index: 0,
+
+            in_hold: false,
+            ready_release: false,
         }
     }
 
@@ -199,8 +213,10 @@ impl Envelope {
             nodes,
             current_time: 0.0,
             current_value: 0.0,
-            in_hold: false,
             current_index: 0,
+
+            in_hold: false,
+            ready_release: false,
         };
         envelope.sort();
         envelope
@@ -208,7 +224,7 @@ impl Envelope {
 
     pub fn tick(&mut self) -> Option<f32> {
         if !self.in_hold {
-            self.current_time += 1.0/44100.0;
+            self.current_time += 1.0/SAMPLE_RATE;
         } else {
             return Some(self.current_value);
         }
@@ -221,8 +237,12 @@ impl Envelope {
         self.current_value = Self::interpolation(&[node, node_2], self.current_time - node.t);
         // 判断是切换下一个节点
         if approx_eq(self.current_time, node_2.t) {
-            debug!("切换节点: {}", self.current_index);
-            if node_2.if_hold {self.in_hold = true;}
+            // debug!("切换节点: {}", self.current_index);
+            // 不仅节点为 hold 类型，还要判断是否已经提前释放了
+            if node_2.if_hold {
+                if !self.ready_release {self.in_hold = true;}
+                self.ready_release = false;
+            }
             self.current_index += 1;
         }
 
@@ -231,7 +251,11 @@ impl Envelope {
 
     // 由外部控制释放 hold
     pub fn release_hold(&mut self) {
-        self.in_hold = false;
+        if self.in_hold {
+            self.in_hold = false;
+        } else {
+            self.ready_release = true;
+        }
     }
 
     pub fn push(&mut self, node: Node) {
@@ -253,4 +277,50 @@ impl Envelope {
             _ => {1.0}
         }
     }
+}
+
+// 目前先搞线性的
+struct Compressor {
+    threshold: f32,
+    kick: f32
+}
+
+impl Compressor {
+    pub fn tick(&self, input: f32) -> f32 {
+        // if input < self.kick {return input;}
+        // else {
+        // }
+        0.0
+    }
+}
+
+struct Limiter {
+    threshold: f32,
+}
+
+impl Limiter {
+    pub fn new() -> Self {
+        Self {threshold: 10.0}
+    }
+    pub fn tick(&self, input: f32) -> f32 {
+        if input < self.threshold {input}
+        else {self.threshold}
+    }
+}
+
+pub fn clip(input: f32) -> f32 {
+    input.min(1.0).max(-1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::init_logger;
+
+    #[test]
+        fn it_works() {
+            init_logger();
+            let mut p = Piano::new();
+            p.handle_midi_message(&[0x90, 0x44, 0x90]);
+        }
 }
