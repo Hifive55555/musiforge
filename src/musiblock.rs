@@ -1,136 +1,96 @@
 use std::collections::HashMap;
 use std::f32::consts::PI;
-// use std::hash::Hash;
-use log::{debug, error};
-// use std::cell::RefCell;
-// use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use log::debug;
 
-use super::{SAMPLE_RATE, db_to_vol};
+use crate::ClockTime;
+
+use super::db_to_vol;
 const DOUBLE_PI: f32 = 2.0 * PI;
+const NOTE_ON_MSG: u8 = 0x90;
+const NOTE_OFF_MSG: u8 = 0x80;
 
-pub struct Piano
-{
-    key_generators: HashMap<u8, Arc<Mutex<PianoGenerator>>>,  // 现在的目标键对应的发生器的指针
-    queue_generators: Vec<Arc<Mutex<PianoGenerator>>>,  // 发生器队列
-    alpha: f32,
-    limiter_master: Limiter,
+
+fn midi_to_freq(midi_key: u8) -> f32 {
+    return 440.0_f32 * 2.0_f32.powf((midi_key as i8 - 0x45) as f32 / 12.0); // 440 * 2^((key-69)/12)
 }
 
-impl Piano {
-    pub fn new() -> Self {
-        debug!("初始化 Pinao");
-        Piano {
-            key_generators: HashMap::new(),
-            queue_generators: Vec::new(),
-            alpha: 0.33,
-            limiter_master: Limiter::new(),
-        }
-    }
+pub struct Oscillator {
+    sample_rate: f32,
+    pub t: f32,
+    pub freq: f32,
+}
 
-    // 处理MIDI消息
-    pub fn handle_midi_message (&mut self, midi_message: &[u8]) {
-        // 这里尚未管通道
-        const NOTE_ON_MSG: u8 = 0x90;
-        const NOTE_OFF_MSG: u8 = 0x80;
-        
-        if midi_message[0] == NOTE_ON_MSG {
-            debug!("发送了 Midi - NOTE ON 信号 {:?}", midi_message);
-            // 发送停止符
-            match self.key_generators.get_mut(&midi_message[1]) {
-                Some(correspond_generator) => {correspond_generator.lock().unwrap().off();}
-                None => {}
-            }
-            // 添加新发生器，并更改键字典映射
-            let new_generator = Arc::new(Mutex::new(
-                PianoGenerator::new(midi_message, self.alpha, midi_message[2] as f32 / 12.7)
-            ));
-            self.queue_generators.push(new_generator.clone());
-            self.key_generators.insert(midi_message[1], new_generator);
-
-        } else if midi_message[0] == NOTE_OFF_MSG {
-            debug!("发送 Midi - NOTE OFF 信号 {:?}", midi_message);
-            // 发送停止符
-            if let Some(generator) = self.key_generators.remove(&midi_message[1]) {
-                generator.lock().unwrap().off();
-            } else {
-                error!("未找到触发的键 {}", midi_message[1])
-            }
+impl Oscillator {
+    pub fn new(freq: f32, sample_rate: f32) -> Self {
+        Self {
+            freq,
+            t: 0.0,
+            sample_rate,
         }
-        debug!("当前发生器队列数 {}", self.queue_generators.len());
     }
 
     pub fn tick(&mut self) -> f32 {
-        let mut output: f32 = 0.0;
-        // 清理空闲发生器，并求所有的振幅加和
-        self.queue_generators.retain_mut(|p| {
-            match p.lock().unwrap().tick() {
-                Some(value) => {
-                    output += value;
-                    true
-                },
-                None => {
-                    debug!("一个 弦 结束了其生命周期");
-                    false
-                },
-            }
-        });
-        // self.limiter_master.tick(output)
-        clip(output)
+        self.t = (self.t + 1.0) % (self.sample_rate * self.freq);
+        (self.t * self.freq * DOUBLE_PI / self.sample_rate).sin()
     }
 }
 
-struct PianoGenerator
-{
-    oscs: Vec<Oscillator>,
-    env_master: Envelope,  // 总 ENVELOP 函数
-    t: f32,
-    vol: f32,
+pub struct AdditiveSynth {
+    sample_rate: f32,
+    pub osc_num: usize,
+    pub harmonic_vols: Vec<f32>,
+    pub env_master: Envelope,  // 总 ENVELOP 函数
 }
 
-impl PianoGenerator {
-    fn new(midi_message: &[u8], alpha: f32, db: f32) -> Self {
-        // 计算泛音
-        let mut oscs = Vec::new();
-        let mut n: f32 = 1.0;
-        // 计算对应频率（A4 = 440.0 Hz = 69）
-        let freq = 440.0_f32 * 2.0_f32.powf((midi_message[1] as i8 - 0x45) as f32 / 12.0);  // 440 * 2^((key-69)/12)
-        loop {
-            if freq * n > 20000.0 {
-                break;
-            }
-            let partial_volume = (1.0 / (n*n)) * (DOUBLE_PI * freq * n * alpha).sin(); // 求解能量收敛的波动方程
-            // debug!("Acticvate Key - frq: {} , n: {}, vol: {}", freq * n, n, partial_volume);
-            oscs.push(Oscillator::new(freq * n, partial_volume));
-            n += 1.0;
-        }
+impl AdditiveSynth {
+    pub fn new(osc_num: usize, sample_rate: f32) -> Self {
+        let harmonic_vols = vec![0.1; osc_num];
         // 生成主包络
         let env_master = Envelope::from(vec![
             Node {t:0.0, v: 1.0, curve: CurveType::Linear, if_hold: false},
             Node {t:0.5, v: 0.7, curve: CurveType::Linear, if_hold: true},
             Node {t:1.0, v: 0.0, curve: CurveType::Linear, if_hold: false},
-        ]);
-        // 计算按键 db 对应的 vol
-        let vol = db_to_vol(db);
-        debug!("初始化 PianoGenerator, 基频 {} Hz, 按压响度 {} db, 转换电平 {} V", freq, db, vol);
-        Self {
-            oscs,
+        ], sample_rate);
+
+        AdditiveSynth {
+            sample_rate,
+            osc_num,
+            harmonic_vols,
             env_master,
-            t: 0.0,
-            vol,
         }
     }
+}
 
-    fn off(&mut self) {
-        // 释放 hold，使其衰减（目前只能无脑release，之后考虑定向释放）
-        self.env_master.release_hold();
+pub struct AdditiveUnit {
+    osc_num: usize,
+    oscs: Vec<Oscillator>,
+    harmonic_vols: Vec<f32>,
+    env_master: Envelope,
+    vol: f32,
+}
+
+impl MidiUnit for AdditiveUnit {
+    fn send(&mut self, midi_msg: &[u8]) {
+        match midi_msg[0] {
+            NOTE_ON_MSG => {
+                debug!("发送了 Midi - NOTE ON 信号 {:?}", midi_msg);
+                self.vol = midi_msg[2] as f32 / 128.0;
+            },
+
+            NOTE_OFF_MSG => {
+                debug!("发送 Midi - NOTE OFF 信号 {:?}", midi_msg);
+                // 释放 hold，使其衰减（目前只能无脑release，之后考虑定向释放）
+                self.env_master.release_hold();
+            },
+
+            _ => {}
+        };
     }
 
     fn tick(&mut self) -> Option<f32> {
-        self.t += 1.0 / SAMPLE_RATE;
-        let mut output: f32 = 0.0;
-        for osc in &mut self.oscs {
-            output += osc.tick();
+        let mut output = 0.0;
+        for i in 0..self.osc_num {
+            output += self.oscs[i].tick() * self.harmonic_vols[i] * self.vol;
         }
         // 计算 midi 按键“声速”
         output = clip(clip(output) * self.vol);
@@ -142,26 +102,92 @@ impl PianoGenerator {
     }
 }
 
-// 被迫做成结构体
-struct Oscillator {
-    t: f32,
-    pub freq: f32,
-    pub volume: f32,
+impl MidiSynth<AdditiveUnit> for AdditiveSynth {
+    fn spawn(&self, midi_msg: &[u8]) -> AdditiveUnit {
+        let base_freq = midi_to_freq(midi_msg[1]);
+
+        let oscs = (1..=self.osc_num)
+            .map(|i| Oscillator::new(base_freq * i as f32, self.sample_rate))
+            .collect();
+
+        AdditiveUnit {
+            osc_num: self.osc_num,
+            oscs,
+            harmonic_vols: self.harmonic_vols.clone(),
+            env_master: self.env_master.clone(),
+            vol: db_to_vol(midi_msg[2] as f32 / 12.7),
+        }
+    }
 }
 
-impl Oscillator {
-    fn new(freq: f32, volume: f32) -> Self {
-        Self {freq, t: 0.0, volume}
+pub trait MidiUnit {
+    fn send(&mut self, midi_msg: &[u8]);
+    fn tick(&mut self) -> Option<f32>;
+}
+
+pub trait MidiSynth<U: MidiUnit> {
+    fn spawn(&self, midi_msg: &[u8]) -> U;
+}
+
+pub struct MidiRack<S, U>
+where
+    S: MidiSynth<U>,
+    U: MidiUnit,
+{
+    key_units: HashMap<u8, U>,
+    synth: Arc<Mutex<S>>,
+}
+
+impl<S, U> MidiRack<S, U>
+where
+    S: MidiSynth<U>,
+    U: MidiUnit,
+{
+    pub fn new(synth: Arc<Mutex<S>>) -> Self {
+        debug!("初始化 MIDI Rack");
+
+        MidiRack {
+            key_units: HashMap::new(),
+            synth,
+        }
     }
 
-    fn tick(&mut self) -> f32 {
-        self.t = (self.t + 1.0) % SAMPLE_RATE;
-        (self.t * self.freq * DOUBLE_PI / SAMPLE_RATE).sin() * self.volume * 0.1
+    pub fn send(&mut self, midi_msg: &[u8]) {
+        match midi_msg[0] {
+            NOTE_ON_MSG => {
+                if self.key_units.contains_key(&midi_msg[1]) || self.key_units.len() < 8 {
+                    self.key_units.insert(midi_msg[1], self.synth.lock().unwrap().spawn(midi_msg));
+                }
+            },
+            NOTE_OFF_MSG => {
+            },
+            _ => {}
+        };
+        if let Some(unit) = self.key_units.get_mut(&midi_msg[1]) {
+            unit.send(midi_msg);
+        }
+    }
+
+    pub fn tick(&mut self) -> f32 {
+        let mut out = 0.0;
+        let mut remove_keys = Vec::new();
+        for (key, unit) in self.key_units.iter_mut() {
+            if let Some(vol) = unit.tick() {
+                out += vol;
+            } else {
+                remove_keys.push(*key);
+            }
+        }
+        for remove_key in remove_keys {
+            self.key_units.remove(&remove_key);
+        }
+        out
     }
 }
+
+
 
 #[derive(Copy, Clone)]
-#[derive(Debug)]
 pub enum CurveType {
     Linear,
     // 下面的以后做，但是意味着 Envelop 的架构要整体改，目前只能邻近插值
@@ -171,7 +197,6 @@ pub enum CurveType {
 }
 
 #[derive(Copy, Clone)]
-#[derive(Debug)]
 pub struct Node {
     pub t: f32,
     pub v: f32,
@@ -180,7 +205,9 @@ pub struct Node {
 }
 
 // 包络生成器
+#[derive(Clone)]  // 考虑去除
 pub struct Envelope {
+    sample_rate: f32,
     nodes: Vec<Node>,
     current_time: f32,
     current_value: f32,
@@ -191,13 +218,13 @@ pub struct Envelope {
 }
 
 use super::approx_eq;
-// use std::cmp::Ordering;
 
 impl Envelope {
     // ...
     
-    pub fn new() -> Self {
+    pub fn new(sample_rate: f32) -> Self {
         Self {
+            sample_rate,
             nodes: Vec::new(),
             current_time: 0.0,
             current_value: 0.0,
@@ -208,8 +235,9 @@ impl Envelope {
         }
     }
 
-    pub fn from(nodes: Vec<Node>) -> Self {
+    pub fn from(nodes: Vec<Node>, sample_rate: f32) -> Self {
         let mut envelope = Self {
+            sample_rate,
             nodes,
             current_time: 0.0,
             current_value: 0.0,
@@ -224,7 +252,7 @@ impl Envelope {
 
     pub fn tick(&mut self) -> Option<f32> {
         if !self.in_hold {
-            self.current_time += 1.0/SAMPLE_RATE;
+            self.current_time += 1.0 / self.sample_rate;
         } else {
             return Some(self.current_value);
         }
@@ -312,15 +340,80 @@ pub fn clip(input: f32) -> f32 {
     input.min(1.0).max(-1.0)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use super::super::init_logger;
+#[derive(Copy, Clone)]
+pub struct Note<SampleType, SignalType: Clone>
+{
+    pub time: SampleType,
+    pub signal: SignalType,
+}
 
-    #[test]
-        fn it_works() {
-            init_logger();
-            let mut p = Piano::new();
-            p.handle_midi_message(&[0x90, 0x44, 0x90]);
+
+// pattern for Duration
+pub fn pattern<const SAMPLE_RATE: u32, SignalType: Clone>(
+    notes: Vec<Note<ClockTime<SAMPLE_RATE>, SignalType>>
+) -> impl Fn(ClockTime<SAMPLE_RATE>) -> Vec<SignalType> {
+    move |time: ClockTime<SAMPLE_RATE>| {
+        let mut signals = Vec::new();
+        for note in &notes {
+            if note.time == time {
+                // println!("time: {}", time.sec);
+                signals.push(note.signal.clone());
+            }
         }
+        signals
+    }
+}
+
+use midir::{Ignore, MidiIO, MidiInput};
+use std::{
+    sync::{Arc, Mutex},
+    error::Error,
+    io::{stdin, stdout, Write},
+};
+
+pub fn listen<const SAMPLE_RATE: u32, S, U>(
+    sender: Arc<Mutex< MidiRack<S, U> >>
+) -> Result<(), Box<dyn Error>>
+where
+    S: MidiSynth<U> + Send + Sync + 'static,
+    U: MidiUnit + Send + Sync + 'static,
+{
+    // 实时设备连接
+    let mut midi_in = MidiInput::new("midir forwarding input")?;
+    midi_in.ignore(Ignore::None);
+
+    let in_port = select_port(&midi_in, "input")?;
+    let in_port_name = midi_in.port_name(&in_port)?;
+    println!("\nOpening connections {}", in_port_name);
+
+    // _conn_in needs to be a named parameter, because it needs to be kept alive until the end of the scope
+    let _conn_in = midi_in.connect(
+        &in_port,
+        "midir-forward",
+        move |stamp, message, _| {
+            sender.lock().unwrap().send(message);
+            debug!("{}: {:?} (len = {})", stamp, message, message.len());
+        },
+        (),
+    )?;
+
+    std::thread::park();
+
+    Ok(())
+}
+
+fn select_port<T: MidiIO>(midi_io: &T, descr: &str) -> Result<T::Port, Box<dyn Error>> {
+    println!("Available {} ports:", descr);
+    let midi_ports = midi_io.ports();
+    for (i, p) in midi_ports.iter().enumerate() {
+        println!("{}: {}", i, midi_io.port_name(p)?);
+    }
+    print!("Please select {} port: ", descr);
+    stdout().flush()?;
+    let mut input = String::new();
+    stdin().read_line(&mut input)?;
+    let port = midi_ports
+        .get(input.trim().parse::<usize>()?)
+        .ok_or("Invalid port number")?;
+    Ok(port.clone())
 }

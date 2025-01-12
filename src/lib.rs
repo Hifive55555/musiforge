@@ -3,7 +3,6 @@ pub mod ui;
 pub mod key;
 pub mod musiblock;
 
-pub const SAMPLE_RATE:f32 = 44100.0;
 
 pub mod config {
     extern crate anyhow;
@@ -13,7 +12,7 @@ pub mod config {
         traits::{DeviceTrait, HostTrait},
         SizedSample,
     };
-    use cpal::{FromSample, Sample};
+    use cpal::FromSample;
 
     pub fn stream_setup_for<SampleType>(
         process_fn: impl FnMut(&mut [SampleType], usize, f32) + Send + 'static
@@ -118,7 +117,7 @@ mod tests {
             Node {t:0.0, v: 1.0, curve: CurveType::Linear, if_hold: false},
             Node {t:0.5, v: 0.7, curve: CurveType::Linear, if_hold: true},
             Node {t:1.0, v: 0.0, curve: CurveType::Linear, if_hold: false},
-        ]);
+        ], 48000.0);
         while let Some(value) = env_master.tick() {
             if approx_eq(value, 0.0) {println!("1 {}", value);}
             if approx_eq(value, 3.0) {
@@ -189,3 +188,124 @@ pub fn db_to_vol(dbfs_value: f32) -> f32 {
 pub fn vol_to_db(normalized_value: f32) -> f32 {
     10.0 * f32::log10(normalized_value.abs() / MAX_NORMALIZED_VALUE)
 }
+
+
+use cpal::{
+    traits::{DeviceTrait, StreamTrait},
+    BufferSize, StreamConfig,
+};
+
+use config::host_device_setup;
+
+
+pub fn create_stream<SampleType, DataFunc>(
+    buffer_size: u32,
+    data_callback: DataFunc,
+) -> impl Fn()
+where
+    SampleType: cpal::SizedSample,
+    DataFunc: FnMut(&mut [SampleType], &cpal::OutputCallbackInfo) + Send + 'static,
+{
+    let (_host, device, config) = host_device_setup().unwrap();
+    let mut config = StreamConfig::from(config);
+    config.buffer_size = BufferSize::Fixed(buffer_size);
+
+    let _num_channels = config.channels as usize;
+    // let time_at_start = std::time::Instant::now();
+
+    let error_callback = |err| eprintln!("Error building output sound stream: {}", err);
+    // let data_callback = move |output: &mut [SampleType], _: &cpal::OutputCallbackInfo| {};
+
+    let stream = device
+        .build_output_stream(&config, data_callback, error_callback, None)
+        .unwrap();
+
+    move || {
+        println!("Stream is playing!");
+        stream.play().unwrap();
+    }
+}
+
+
+use std::time::Duration;
+
+/// 播放时间
+#[derive(PartialEq, Clone, Copy)]
+pub struct ClockTime<const SAMPLE_RATE: u32> {
+    pub sec: i64,
+    pub sample: u32,
+}
+
+impl<const SAMPLE_RATE: u32> ClockTime<SAMPLE_RATE> {
+    pub fn new() -> Self {
+        ClockTime {
+            sec: 0,
+            sample: 0
+        }
+    }
+
+    pub fn tick(&mut self) {
+        self.sample += 1;
+        self.sec += (self.sample / SAMPLE_RATE) as i64;
+        self.sample %= SAMPLE_RATE;
+    }
+}
+
+impl<const SAMPLE_RATE: u32> std::ops::Add<ClockTime<SAMPLE_RATE>> for ClockTime<SAMPLE_RATE> {
+    type Output = ClockTime<SAMPLE_RATE>;
+
+    fn add(self, rhs: ClockTime<SAMPLE_RATE>) -> Self::Output {
+        let sample = self.sample + rhs.sample;
+        let sec = self.sec + rhs.sec + (sample / SAMPLE_RATE) as i64;
+        let sample = sample / SAMPLE_RATE;
+
+        ClockTime {
+            sec,
+            sample
+        }
+    }
+}
+
+impl<const SAMPLE_RATE: u32> std::ops::Sub<ClockTime<SAMPLE_RATE>> for ClockTime<SAMPLE_RATE> {
+    type Output = ClockTime<SAMPLE_RATE>;
+
+    fn sub(self, rhs: ClockTime<SAMPLE_RATE>) -> Self::Output {
+        let sec: i64;
+        let sample: u32;
+
+        if self.sample > rhs.sample {
+            sample = self.sample - rhs.sample;
+            sec = self.sec - rhs.sec;
+        } else {
+            sample = SAMPLE_RATE + self.sample - rhs.sample;
+            sec = self.sec - rhs.sec - 1;
+        }
+
+        ClockTime {
+            sec,
+            sample
+        }
+    }
+}
+
+impl<const SAMPLE_RATE: u32> From<ClockTime<SAMPLE_RATE>> for Duration {
+    fn from(value: ClockTime<SAMPLE_RATE>) -> Self {
+        Duration::new(
+            value.sec.abs() as u64,
+            value.sample * 1000_000_000 / SAMPLE_RATE
+        )
+    }
+}
+
+impl<const SAMPLE_RATE: u32> From<f32> for ClockTime<SAMPLE_RATE> {
+    fn from(value: f32) -> Self {
+        let sec = value as i64;
+        let sample = ((value - sec as f32) * SAMPLE_RATE as f32) as u32;
+
+        ClockTime {
+            sec,
+            sample
+        }
+    }
+}
+

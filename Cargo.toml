@@ -6,14 +6,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cpal = "*"
-midir = "*"
+cpal = "0.15"
+midir = "0.10"
 
-anyhow = "*"
-log = "*"
+anyhow = "1.0"
+log = "0.4"
 env_logger = "0.10"
-chrono = "*"
+chrono = "0.4"
+# tokio = { version = "1", features = ["full"] }
 
-eframe = "*"
-egui = "*"
+eframe = "0.29"
+egui = "0.29"
 winapi = { version = "0.3", features = ["winuser", "windef"] }
