@@ -18,3 +18,5 @@ chrono = "0.4"
 eframe = "0.29"
 egui = "0.29"
 winapi = { version = "0.3", features = ["winuser", "windef"] }
+uuid = { version = "1.16.0", features = ["v4"] }
+petgraph = "0.8.1"

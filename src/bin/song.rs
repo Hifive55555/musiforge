@@ -83,7 +83,7 @@ fn data_callback() -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) + Send +
 
 fn main() {
     init_logger();
-    let gf = create_stream(10240, data_callback());
+    let gf = create_stream(10240, 48000, data_callback());
     gf();
     std::thread::park();
 }

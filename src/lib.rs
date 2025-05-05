@@ -2,6 +2,8 @@
 pub mod ui;
 pub mod key;
 pub mod musiblock;
+pub mod graph_flow;
+pub mod block;
 
 
 pub mod config {
@@ -200,6 +202,7 @@ use config::host_device_setup;
 
 pub fn create_stream<SampleType, DataFunc>(
     buffer_size: u32,
+    sample_rate: u32,
     data_callback: DataFunc,
 ) -> impl Fn()
 where
@@ -209,6 +212,7 @@ where
     let (_host, device, config) = host_device_setup().unwrap();
     let mut config = StreamConfig::from(config);
     config.buffer_size = BufferSize::Fixed(buffer_size);
+    config.sample_rate = cpal::SampleRate(sample_rate);
 
     let _num_channels = config.channels as usize;
     // let time_at_start = std::time::Instant::now();

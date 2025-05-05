@@ -41,7 +41,7 @@ fn data_callback() -> impl FnMut(&mut [f32], &cpal::OutputCallbackInfo) + Send +
 fn main() -> Result<(), Box<dyn Error>> {
     init_logger();
 
-    let gf = create_stream(1024, data_callback());
+    let gf = create_stream(1024, 48000, data_callback());
     gf();
 
     let mut input = String::new();
