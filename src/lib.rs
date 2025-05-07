@@ -1,7 +1,6 @@
-// use std::collections::HashMap;
-pub mod ui;
 pub mod key;
 pub mod musiblock;
+pub mod effects;
 
 
 pub mod config {

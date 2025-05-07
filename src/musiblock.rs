@@ -49,7 +49,7 @@ impl AdditiveSynth {
         let env_master = Envelope::from(vec![
             Node {t:0.0, v: 1.0, curve: CurveType::Linear, if_hold: false},
             Node {t:0.5, v: 0.7, curve: CurveType::Linear, if_hold: true},
-            Node {t:1.0, v: 0.0, curve: CurveType::Linear, if_hold: false},
+            Node {t:0.6, v: 0.0, curve: CurveType::Linear, if_hold: false},
         ], sample_rate);
 
         AdditiveSynth {

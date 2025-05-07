@@ -8,6 +8,8 @@ edition = "2021"
 [dependencies]
 cpal = "0.15"
 midir = "0.10"
+hound = "3.5.1"
+rustfft = "6.2.0"
 
 anyhow = "1.0"
 log = "0.4"
@@ -15,6 +17,6 @@ env_logger = "0.10"
 chrono = "0.4"
 # tokio = { version = "1", features = ["full"] }
 
-eframe = "0.29"
-egui = "0.29"
-winapi = { version = "0.3", features = ["winuser", "windef"] }
+# eframe = "0.29"
+# egui = "0.29"
+# winapi = { version = "0.3", features = ["winuser", "windef"] }

@@ -1,6 +1,6 @@
 /target
-Cargo.lock
+*.lock
 desktop.ini
 .vscode
 .cargo
-.lock
+test_data/
