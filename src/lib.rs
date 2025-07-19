@@ -193,7 +193,7 @@ pub fn vol_to_db(normalized_value: f32) -> f32 {
 
 
 use cpal::{
-    traits::{DeviceTrait, StreamTrait},
+    traits::{DeviceTrait, HostTrait, StreamTrait},
     BufferSize, StreamConfig,
 };
 
@@ -209,16 +209,16 @@ where
     SampleType: cpal::SizedSample,
     DataFunc: FnMut(&mut [SampleType], &cpal::OutputCallbackInfo) + Send + 'static,
 {
-    let (_host, device, config) = host_device_setup().unwrap();
-    let mut config = StreamConfig::from(config);
-    config.buffer_size = BufferSize::Fixed(buffer_size);
-    config.sample_rate = cpal::SampleRate(sample_rate);
+    let host = cpal::default_host();
+    let device = host.default_output_device().expect("Failed to find default output device");
 
-    let _num_channels = config.channels as usize;
-    // let time_at_start = std::time::Instant::now();
+    let config = StreamConfig {
+        channels: 2,
+        sample_rate: cpal::SampleRate(sample_rate),
+        buffer_size: BufferSize::Fixed(buffer_size),
+    };
 
     let error_callback = |err| eprintln!("Error building output sound stream: {}", err);
-    // let data_callback = move |output: &mut [SampleType], _: &cpal::OutputCallbackInfo| {};
 
     let stream = device
         .build_output_stream(&config, data_callback, error_callback, None)
